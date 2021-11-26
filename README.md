@@ -6,6 +6,7 @@ You must first have access to AmsterdamUMCdb, including the data. Further instru
 
 ```
 mv concepts/sepsis3 ADB_PATH/concepts/
+mkdir ADB_PATH/data/additional_files
 cd ADB_PATH/concepts/
 python sepsis3_amsterdamumcdb.py
 python reason_for_admission_sepsis.py
