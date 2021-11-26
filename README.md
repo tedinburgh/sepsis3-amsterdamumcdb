@@ -1,4 +1,4 @@
-# Sepsis-3 criteria in Amsterdac
+# Sepsis-3 criteria in AmsterdamUMCdb
 
 This repository contains files for implementing the Sepsis-3 definition in the freely-accessible Amsterdam University Medical Centers Database.
 
