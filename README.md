@@ -2,14 +2,14 @@
 
 This repository contains files for implementing the Sepsis-3 definition in the freely-accessible Amsterdam University Medical Centers Database.
 
-You must first have access to AmsterdamUMCdb, including the data. Further instructions for this can be found on the [Amsterdam Medical Data Science](https://amsterdammedicaldatascience.nl/) website or [AmsterdamUMCdb GitHub](https://github.com/AmsterdamUMC/AmsterdamUMCdb). To run this code, download the repository and simply move the folder `concepts/sepsis3` to the `concepts` folder in your local version of AmsterdamUMCdb and run all python scripts in order, changing `ADB_PATH` in the below to the relevant file path for AmsterdamUMCdb, as follows:
+You must first have access to AmsterdamUMCdb, including the data. Further instructions for this can be found on the [Amsterdam Medical Data Science](https://amsterdammedicaldatascience.nl/) website or [AmsterdamUMCdb GitHub](https://github.com/AmsterdamUMC/AmsterdamUMCdb). To run this code, download the repository and simply move the folder `concepts/sepsis3` to the `concepts` folder in your local version of AmsterdamUMCdb and run all python scripts in this order, changing `ADB_PATH` in the below to the relevant file path for AmsterdamUMCdb, as follows:
 
 ```
 mv concepts/sepsis3 ADB_PATH/concepts/
 mkdir ADB_PATH/data/additional_files
 cd ADB_PATH/concepts/
+python reason_for_admission.py
 python sepsis3_amsterdamumcdb.py
-python reason_for_admission_sepsis.py
 python sepsis_comparison.py
 ```
 
