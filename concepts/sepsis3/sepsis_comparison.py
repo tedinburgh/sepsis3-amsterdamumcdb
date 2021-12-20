@@ -103,10 +103,10 @@ def get_latex(df):
     return latex_str
 
 tableI = r'\begin{table}' + '\n\t'
-tableI += r'\begin{tabular}{l|l|rr|r}' + '\n\t\t'
+tableI += r'\begin{tabular}{ll|rr}' + '\n\t\t'
 tableI += r'\multicolumn{2}{c|}{Unique first} & \multicolumn{2}{c}{Current}'
 tableI += r' \\' +  '\n\t\t'
-tableI += r'\multicolumn{2}{c|}{admissions} & True & False & \\' + '\n\t\t'
+tableI += r'\multicolumn{2}{c|}{admissions} & True & False \\' + '\n\t\t'
 tableI += r'\midrule' + '\n\t\t'
 tableI += r'Sepsis-3 & True & ' + str(first_admissions_tp)
 tableI += ' & ' + str(first_admissions_fn) + r' \\' + '\n\t\t'
@@ -114,14 +114,15 @@ tableI += ' & False & ' + str(first_admissions_fp)
 tableI += ' & ' + str(first_admissions_tn) + r' \\' + '\n\t\t'
 tableI += r'\bottomrule' + '\n\t'
 tableI += r'\end{tabular}~~~~~~~~' + '\n\t'
-tableI += r'\begin{tabular}{l|l|rr|r}' + '\n\t\t'
+tableI += r'\begin{tabular}{ll|rr}' + '\n\t\t'
 tableI += r'\multicolumn{2}{c|}{All} & ' + r'\multicolumn{2}{c}{Current}'
 tableI += r' \\' +  '\n\t\t'
-tableI += r'\multicolumn{2}{c|}{admissions} & True & False & \\' + '\n\t\t'
+tableI += r'\multicolumn{2}{c|}{admissions} & True & False \\' + '\n\t\t'
 tableI += r'\midrule' + '\n\t\t'
 tableI += r'Sepsis-3 & True & ' + str(all_admissions_tp)
 tableI += ' & ' + str(all_admissions_fn) + r' \\' + '\n\t\t'
-tableI += ' & False & ' + str(all_admissions_fp) + r' \\' + '\n\t\t'
+tableI += ' & False & ' + str(all_admissions_fp)
+tableI += ' & ' + str(all_admissions_tn) + r' \\' + '\n\t\t'
 tableI += r'\bottomrule' + '\n\t'
 tableI += r'\end{tabular}' + '\n'
 tableI += r'\end{table}'
@@ -129,9 +130,12 @@ tableI += r'\end{table}'
 tableII = get_latex(sofa.loc[sofa['admissionid'].isin([0,1,2,3])])
 tableIII = get_latex(sepsis.loc[sepsis['admissionid'].isin([0,1,2,3])])
 
+tableII = tableII.replace('nan', 'NaN')
+tableIII = tableIII.replace('nan', 'NaN')
+
 output_txt = 'Table 1 in LaTeX:\n\n' + tableI + '\n\n\n'
 output_txt += 'Table 2 in LaTeX:\n\n' + tableII + '\n\n\n'
 output_txt += 'Table 3 in LaTeX:\n\n' + tableIII + '\n'
 
 with open(additional_file_path + 'sepsis3_latex_tables.txt', 'w') as f:
-    f.write(output.txt)
+    f.write(output_txt)

@@ -13,7 +13,6 @@
 
 ################################################################################
 
-
 import pandas as pd
 import numpy as np
 import re
@@ -43,16 +42,14 @@ MIN_TIME = -3 ## in days
 MAX_TIME = 10 ## in days
 
 ## The directory 'data' should contain the base AmsterdamUMCdb .csv files.
-## This is not directly available from the AmsterdamUMCdb GitHub page, and
-## access must be specifically requested from the database owners.
-## The directory 'additional_files' will contain output .csv files from this
-## script, as well as the ATC codes/antibiotics .csv files mentioned later.
+## Access must be specifically requested from the database owners. The
+## directory 'additional_files' will contain output .csv files from this script.
 file_path = '../../data/'
 additional_file_path = '../../data/additional_files/'
 
-list_columns = ['admissionid', 'itemid', 'valueid']
-list_columns += ['value', 'measuredat', 'registeredby']
-listitems = pd.read_csv(file_path + 'listitems.csv', usecols = list_columns)
+list_columns = ['admissionid', 'itemid', 'valueid', 'value']
+list_columns += ['updatedat', 'measuredat', 'registeredby']
+listitems = pd.read_csv(file_path + 'listitems.csv', usecols=list_columns)
 
 drug_columns = ['admissionid', 'itemid', 'item', 'duration', 'rate', 'rateunit']
 drug_columns += ['start', 'stop', 'dose', 'doserateperkg', 'doseunitid']
@@ -62,6 +59,10 @@ drugitems = pd.read_csv(file_path + 'drugitems.csv', usecols=drug_columns)
 freetextitems = pd.read_csv(file_path + 'freetextitems.csv')
 
 admissions_df = pd.read_csv(file_path + 'admissions.csv')
+
+## From the script 'reason_for_admission.py', which must be run first
+combined_diagnoses = pd.read_csv(
+    additional_file_path + 'combined_diagnoses.csv')
 
 ## Out of the AmsterdamUMCdb data files, numerics is by far the biggest. So
 ## we have to be a bit more careful loading it in (by chunks).
@@ -73,7 +74,6 @@ numerics_dtypes = dict(zip(numerics_cols, numerics_dtypes))
 numerics_csv = dict(
     encoding='latin-1', usecols=numerics_cols, dtype=numerics_dtypes,
     chunksize=10**6)
-
 
 def numerics_read(itemid_list, start=None, end=None, admissions_df=None):
     ## Load numerics by chunk and retains rows with itemid in the given list.
@@ -89,7 +89,6 @@ def numerics_read(itemid_list, start=None, end=None, admissions_df=None):
         for chunk in reader:
             if ((ii % 100) == 0):
                 print(ii)
-            ##
             chunk = chunk.loc[chunk['itemid'].isin(itemid_list)]
             if admissions_df is not None:
                 chunk = pd.merge(chunk, admissions_df, \
@@ -157,6 +156,7 @@ start_time = 1000*60*60*24*MIN_TIME if MIN_TIME is not None else None
 numerics_sofa = numerics_read(
     numerics_sofa_itemid + numerics_abp_itemid, admissions_df=admissions_df,
     end=end_time, start=start_time)
+## We need a baseline creatinine, so look back further.
 numerics_creatinine = numerics_read(
     numerics_creatinine_itemid, admissions_df=admissions_df,
     end=end_time, start=-1000*60*60*24*365)
@@ -177,8 +177,8 @@ drugitems[['start_time', 'stop_time']] //= (1000*60*60*24) ## Convert to 'day'
 
 freetextitems = pd.merge(
     freetextitems, admissions_add, on='admissionid', how='left')
-freetextitems['time'] = \
-    (freetextitems['measuredat'] - freetextitems['admittedat'])
+freetextitems['time'] = (
+    freetextitems['measuredat'] - freetextitems['admittedat'])
 freetextitems['time'] //= (1000*60*60*24)
 
 ## Cut only to the time window specified earlier
@@ -209,13 +209,12 @@ oxy_flow_listitems = listitems.loc[
 oxy_dev = numerics_sofa.loc[numerics_sofa['itemid'].isin([8845, 10387, 18587])]
 oxy_flow = pd.merge(
     oxy_flow_listitems, oxy_dev[['admissionid', 'measuredat', 'value']],
-    on=['admissionid', 'measuredat'], how='left'
-)
+    on=['admissionid', 'measuredat'], how='left')
 oxy_flow.rename(columns={'value_x': 'O2_device'}, inplace=True)
 oxy_flow.rename(columns={'value_y': 'O2_flow'}, inplace=True)
 oxy_flow.head()
-## get PaO2 and FiO2 values
-## simultaneously retrieve PaCO2 and the 'nearest' FiO2 from the ventilator or
+## Get PaO2 and FiO2 values
+## Simultaneously retrieve PaCO2 and the 'nearest' FiO2 from the ventilator or
 ## estimated FiO2 based on applied oxygen device. Ideally documentation of
 ## measurements should be at the same time, but since this is not guaranteed
 ## allow a window.
@@ -223,7 +222,7 @@ oxy_flow.head()
 fio2_itemids = [8845, 10387, 18587, 6699, 12279, 12369, 16246]
 fio2_table = numerics_sofa.loc[
     (numerics_sofa['value'] > 0) &
-    numerics_sofa['itemid'].isin(fio2_itemids)]
+    (numerics_sofa['itemid'].isin(fio2_itemids))]
 fio2_table = pd.merge(
     fio2_table, oxy_flow_listitems.drop(columns=['time']),
     on=['admissionid', 'measuredat'], how='left')
@@ -241,95 +240,62 @@ fio2_table.loc[fio2_ind, 'fio2'] = fio2_table.loc[fio2_ind, 'value']
 valueids1 = [1, 2, 3, 4, 7, 8, 9, 18, 19]
 ## Diep Nasaal, Nasaal, Kapje, Kunstneus, O2-bril, Kinnebak, Nebulizer,
 ## Spreekcanule, Spreekklepje
+temp_ind = (
+    (~fio2_table['ventilatory_support']) &
+    (fio2_table['valueid'].isin(valueids1)))
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids1) &
-        (fio2_table['value'] >= 1) &
-        (fio2_table['value'] < 2),
+        temp_ind & (fio2_table['value'] >= 1) & (fio2_table['value'] < 2),
     'fio2'] = 0.22
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids1) &
-        (fio2_table['value'] >= 2) &
-        (fio2_table['value'] < 3),
+        temp_ind & (fio2_table['value'] >= 2) & (fio2_table['value'] < 3),
     'fio2'] = 0.25
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids1) &
-        (fio2_table['value'] >= 3) &
-        (fio2_table['value'] < 4),
+        temp_ind & (fio2_table['value'] >= 3) & (fio2_table['value'] < 4),
     'fio2'] = 0.27
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids1) &
-        (fio2_table['value'] >= 4) &
-        (fio2_table['value'] < 5),
+        temp_ind & (fio2_table['value'] >= 4) & (fio2_table['value'] < 5),
     'fio2'] = 0.30
-fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids1) &
-        (fio2_table['value'] >= 5),
-    'fio2'] = 0.35
+fio2_table.loc[temp_ind & (fio2_table['value'] >= 5), 'fio2'] = 0.35
 
 valueids2 = [1, 3, 4, 8, 9, 18, 19]
 ## Diep Nasaal, Kapje, Kunstneus, Kinnebak, Nebulizer, Spreekcanule,
 ## Spreekklepje
+temp_ind = (
+    (~fio2_table['ventilatory_support']) &
+    (fio2_table['valueid'].isin(valueids2)))
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids2) &
-        (fio2_table['value'] >= 6) &
-        (fio2_table['value'] < 7),
+    temp_ind & (fio2_table['value'] >= 6) & (fio2_table['value'] < 7),
     'fio2'] = 0.40
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids2) &
-        (fio2_table['value'] >= 7) &
-        (fio2_table['value'] < 8),
+        temp_ind & (fio2_table['value'] >= 7) & (fio2_table['value'] < 8),
     'fio2'] = 0.45
-fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids2) &
-        (fio2_table['value'] >= 8),
-    'fio2'] = 0.50
+fio2_table.loc[temp_ind & (fio2_table['value'] >= 8), 'fio2'] = 0.50
 
 valueids3 = [10, 11, 13, 14, 15, 16, 17]
 ## Waterset, Trach.stoma, Ambu, Guedel, DL-tube, CPAP, Non-Rebreathing masker
+temp_ind = (
+    (~fio2_table['ventilatory_support']) &
+    (fio2_table['valueid'].isin(valueids3)))
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids3) &
-        (fio2_table['value'] >= 6) &
-        (fio2_table['value'] < 7),
+        temp_ind & (fio2_table['value'] >= 6) & (fio2_table['value'] < 7),
     'fio2'] = 0.60
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids3) &
-        (fio2_table['value'] >= 7) &
-        (fio2_table['value'] < 8),
+        temp_ind & (fio2_table['value'] >= 7) & (fio2_table['value'] < 8),
     'fio2'] = 0.70
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids3) &
-        (fio2_table['value'] >= 8) &
-        (fio2_table['value'] < 9),
+        temp_ind & (fio2_table['value'] >= 8) & (fio2_table['value'] < 9),
     'fio2'] = 0.80
 fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids3) &
-        (fio2_table['value'] >= 9) &
-        (fio2_table['value'] < 10),
+        temp_ind & (fio2_table['value'] >= 9) & (fio2_table['value'] < 10),
     'fio2'] = 0.85
-fio2_table.loc[
-        ~fio2_table['ventilatory_support'] &
-        fio2_table['valueid'].isin(valueids3) &
-        (fio2_table['value'] >= 10),
-    'fio2'] = 0.90
+fio2_table.loc[temp_ind & (fio2_table['value'] >= 10), 'fio2'] = 0.90
 fio2_table.rename(columns={'measuredat': 'fio2_measuredat'}, inplace=True)
 fio2_cols = ['admissionid', 'fio2_measuredat', 'fio2']
 fio2_cols += ['ventilatory_support', 'time']
 
 ## This is initially pao2 and then merged with fio2 from above.
-oxygenation = \
-    numerics_sofa.loc[numerics_sofa['itemid'].isin([7433, 9996, 21214])]
+oxygenation = numerics_sofa.loc[
+    numerics_sofa['itemid'].isin([7433, 9996, 21214])]
 ## itemids above are: PO2, PO2 (bloed), PO2 (bloed) - kPa
 ## Conversion from kPa to mmHg
 oxygenation.loc[oxygenation['unitid'] == 152, 'value'] *= 7.50061683
@@ -349,8 +315,8 @@ oxygenation = oxygenation.loc[
 
 oxygenation = pd.merge(
     oxygenation, fio2_table[fio2_cols], on=['admissionid','time'], how='left')
-oxygenation['FiO2_time_difference'] = \
-    (oxygenation['fio2_measuredat'] - oxygenation['measuredat'])
+oxygenation['FiO2_time_difference'] = (
+    oxygenation['fio2_measuredat'] - oxygenation['measuredat'])
 ## Keep fio2 only if no earlier than 60 minutes before pao2 measurement
 oxygenation = oxygenation.loc[oxygenation['FiO2_time_difference'] > -1000*60*60]
 ## and no later than 15 minutes after pao2 measuremen
@@ -365,34 +331,33 @@ oxygenation = oxygenation.sort_values(
 ## Discard duplicates of the same patient and timestamp (keeping only the
 ## smallest fio2 time difference)
 oxygenation = oxygenation.loc[
-    ~(oxygenation[['admissionid', 'measuredat']].duplicated())]
+    (~(oxygenation[['admissionid', 'measuredat']].duplicated()))]
 oxygenation['priority'] = 1
 
-sofa_respiration = oxygenation[
-    ['admissionid', 'pao2', 'specimen_source', 'manual_entry', 'time', 'fio2',
-    'ventilatory_support', 'FiO2_time_difference', 'priority']]
+sofa_resp_cols = ['admissionid', 'pao2', 'specimen_source', 'manual_entry']
+sofa_resp_cols += ['time', 'fio2', 'ventilatory_support']
+sofa_resp_cols += ['FiO2_time_difference', 'priority']
+sofa_respiration = oxygenation[sofa_resp_cols]
 sofa_respiration.head()
 
 ## Remove extreme outliers (in the AmsterdamUMCdb script, histograms are
 ## plotted to identify these outliers by eye, here we just copy those values)
 sofa_respiration.loc[(sofa_respiration['fio2'] > 100), 'fio2'] = np.nan
-
 ## Convert FiO2 in % to fraction
 sofa_respiration.loc[
         (sofa_respiration['fio2'] <= 100) &
         (sofa_respiration['fio2'] >= 20),
     'fio2'] /= 100
-
 ## Remove lower outliers, most likely incorrectly labeled as 'arterial'
 ## instead of '(mixed/central) venous'
 sofa_respiration.loc[sofa_respiration['pao2'] < 50, 'pao2'] = np.nan
 sofa_respiration = sofa_respiration.dropna(subset=['pao2'])
 
 ## Get the PF ratio
-sofa_respiration.loc[:,'pf_ratio'] = \
-    sofa_respiration['pao2'] / sofa_respiration['fio2']
-sofa_respiration['ventilatory_support'] = \
-    (sofa_respiration['ventilatory_support'] == True)
+sofa_respiration.loc[:,'pf_ratio'] = (
+    sofa_respiration['pao2'] / sofa_respiration['fio2'])
+sofa_respiration['ventilatory_support'] = (
+    sofa_respiration['ventilatory_support'] == True)
 
 ## Calculate SOFA respiration score:
 sofa_respiration['sofa_respiration_score'] = 0
@@ -415,12 +380,11 @@ sofa_respiration.loc[
 
 sofa_respiration.head()
 
-
 ########################
 ## Coagulation score (platelets (thrombocytes))
 
-sofa_platelets = \
-    numerics_sofa.loc[numerics_sofa['itemid'].isin([9964, 6797, 10409, 14252])]
+sofa_platelets = numerics_sofa.loc[
+    numerics_sofa['itemid'].isin([9964, 6797, 10409, 14252])]
 ## itemids above are: Thrombo's (bloed), Thrombocyten, Thrombo's citr. bloed
 ## (bloed), Thrombo CD61 (bloed)
 sofa_platelets['manual_entry'] = True
@@ -428,27 +392,23 @@ sofa_platelets.loc[systeem_flag(sofa_platelets), 'manual_entry'] = False
 sofa_platelets_columns = ['admissionid', 'itemid', 'item', 'value']
 sofa_platelets_columns += ['registeredby', 'manual_entry', 'time']
 sofa_platelets = sofa_platelets[sofa_platelets_columns]
-sofa_platelets.head()
+
 ## Calculate SOFA coagulation score:
 sofa_platelets['sofa_coagulation_score'] = 0
 sofa_platelets.loc[
-        (sofa_platelets['value'] < 150) &
-        (sofa_platelets['value'] >= 100),
+        (sofa_platelets['value'] < 150) & (sofa_platelets['value'] >= 100),
     'sofa_coagulation_score'] = 1
 sofa_platelets.loc[
-        (sofa_platelets['value'] < 100) &
-        (sofa_platelets['value'] >= 50),
+        (sofa_platelets['value'] < 100) & (sofa_platelets['value'] >= 50),
     'sofa_coagulation_score'] = 3
 sofa_platelets.loc[
-        (sofa_platelets['value'] < 50) &
-        (sofa_platelets['value'] >= 20),
+        (sofa_platelets['value'] < 50) & (sofa_platelets['value'] >= 20),
     'sofa_coagulation_score'] = 3
 sofa_platelets.loc[
         (sofa_platelets['value'] < 20),
     'sofa_coagulation_score'] = 4
 
 sofa_platelets.head()
-
 
 ########################
 ## Liver score (bilirubin)
@@ -459,28 +419,23 @@ sofa_bilirubin.loc[systeem_flag(sofa_bilirubin), 'manual_entry'] = False
 sofa_bilirubin_columns = ['admissionid', 'itemid', 'item', 'value']
 sofa_bilirubin_columns += ['registeredby', 'manual_entry', 'time']
 sofa_bilirubin = sofa_bilirubin[sofa_bilirubin_columns]
-sofa_bilirubin.head()
 
 ## Calculate SOFA liver score:
 sofa_bilirubin['sofa_liver_score'] = 0
 sofa_bilirubin.loc[
-        (sofa_bilirubin['value'] >= 20) &
-        (sofa_bilirubin['value'] < 33),
+        (sofa_bilirubin['value'] >= 20) & (sofa_bilirubin['value'] < 33),
     'sofa_liver_score'] = 1
 sofa_bilirubin.loc[
-        (sofa_bilirubin['value'] >= 33) &
-        (sofa_bilirubin['value'] < 102),
+        (sofa_bilirubin['value'] >= 33) & (sofa_bilirubin['value'] < 102),
     'sofa_liver_score'] = 2
 sofa_bilirubin.loc[
-        (sofa_bilirubin['value'] >= 102) &
-        (sofa_bilirubin['value'] < 204),
+        (sofa_bilirubin['value'] >= 102) & (sofa_bilirubin['value'] < 204),
     'sofa_liver_score'] = 3
 sofa_bilirubin.loc[
         (sofa_bilirubin['value'] >= 204),
     'sofa_liver_score'] = 4
 
 sofa_bilirubin.head()
-
 
 ########################
 ## Cardiovascular score
@@ -491,7 +446,7 @@ cv_drugitems += [6818] # Adrenaline (Epinefrine)
 cv_drugitems += [7229] # Noradrenaline (Norepinefrine)
 
 sofa_cardiovascular = drugitems.loc[
-    drugitems['itemid'].isin(cv_drugitems) &
+    (drugitems['itemid'].isin(cv_drugitems)) &
     (drugitems['rate'] > 0.1) &
     (drugitems['ordercategoryid'] == 65)]
 
@@ -499,22 +454,11 @@ admissions_add = admissions_df[['admissionid', 'admittedat', 'weightgroup']]
 sofa_cardiovascular = pd.merge(
     sofa_cardiovascular, admissions_add, on='admissionid', how='left')
 
-sofa_cardiovascular['patientweight'] = 80
-sofa_cardiovascular['weightgroup'].fillna('None', inplace=True)
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('59'),
-    'patientweight'] = 55
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('60'),
-    'patientweight'] = 65
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('70'),
-    'patientweight'] = 75
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('80'),
-    'patientweight'] = 85
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('90'),
-    'patientweight'] = 95
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('100'),
-    'patientweight'] = 105
-sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('110'),
-    'patientweight'] = 115
+weight_group_dict = {
+    '59-': 55, '60-69': 65, '70-79': 75, '80-89': 85, '90-99': 95,
+    '100-109': 105, '110+': 115, np.nan: 80}
+sofa_cardiovascular['patientweight'] = (
+    sofa_cardiovascular['weightgroup'].replace(weight_group_dict))
 
 ## Want to add extra rows to the dataframe, for when drug administration
 ## happened over consecutive 'days' (i.e. make an entry for each 'day' that
@@ -522,23 +466,24 @@ sofa_cardiovascular.loc[sofa_cardiovascular['weightgroup'].str.contains('110'),
 n_days = sofa_cardiovascular['stop_time'] - sofa_cardiovascular['start_time']
 n_days += 1
 sofa_cardiovascular = sofa_cardiovascular.loc[
-    sofa_cardiovascular.index.repeat(n_days)].reset_index(drop=True)
+    sofa_cardiovascular.index.repeat(n_days)
+].reset_index(drop=True)
 sofa_cardiovascular['time'] = np.hstack([np.arange(x) for x in n_days])
 sofa_cardiovascular['time'] += sofa_cardiovascular['start_time']
 sofa_cardiovascular = sofa_cardiovascular.loc[
     (sofa_cardiovascular['time'] <= MAX_TIME)]
-sofa_cardiovascular.drop(\
+sofa_cardiovascular.drop(
     columns=['ordercategoryid', 'start', 'stop', 'weightgroup'], inplace=True)
 sofa_cardiovascular.head()
 
 ## Calculate gamma, as per AmsterdamUMCdb script
-sofa_cardiovascular['gamma'] = sofa_cardiovascular['dose'] / 80
+sofa_cardiovascular['gamma'] = (sofa_cardiovascular['dose'] / 80)
 valid_weight_ind = sofa_cardiovascular['patientweight'] > 0
-sofa_cardiovascular.loc[valid_weight_ind, 'gamma'] = \
-    sofa_cardiovascular.loc[valid_weight_ind, 'dose'] / \
-    sofa_cardiovascular.loc[valid_weight_ind, 'patientweight']
-sofa_cardiovascular.loc[sofa_cardiovascular['doserateperkg'] == 1, 'gamma'] = \
-    sofa_cardiovascular.loc[sofa_cardiovascular['doserateperkg'] == 1, 'dose']
+sofa_cardiovascular.loc[valid_weight_ind, 'gamma'] = (
+    sofa_cardiovascular.loc[valid_weight_ind, 'dose'] /
+    sofa_cardiovascular.loc[valid_weight_ind, 'patientweight'])
+sofa_cardiovascular.loc[sofa_cardiovascular['doserateperkg'] == 1, 'gamma'] = (
+    sofa_cardiovascular.loc[sofa_cardiovascular['doserateperkg'] == 1, 'dose'])
 sofa_cardiovascular.loc[
         sofa_cardiovascular['doseunitid'] == 10,
     'gamma'] *= 1000
@@ -559,8 +504,8 @@ mean_abp_cols = ['admissionid', 'itemid', 'item', 'value', 'validated', 'time']
 mean_abp = mean_abp[mean_abp_cols]
 mean_abp = mean_abp.dropna(subset=['value'])
 ## Use mean_abp 'cleansed' dataframe
-sofa_cardiovascular_map = \
-    mean_abp.groupby(['admissionid', 'itemid', 'item', 'time']).agg(
+cv_groupby_cols = ['admissionid', 'itemid', 'item', 'time']
+sofa_cardiovascular_map = mean_abp.groupby(cv_groupby_cols).agg(
         lowest_mean_abp=pd.NamedAgg(column='value', aggfunc='min')
     ).reset_index()
 
@@ -572,8 +517,7 @@ sofa_cardiovascular_map.loc[
     'sofa_cardiovascular_score'] = 1
 sofa_cardiovascular_map.head()
 
-sofa_cardiovascular_meds = \
-    sofa_cardiovascular.groupby(['admissionid','itemid', 'item', 'time']).agg(
+sofa_cardiovascular_meds = sofa_cardiovascular.groupby(cv_groupby_cols).agg(
         total_duration=pd.NamedAgg(column='duration', aggfunc='sum'),
         max_gamma=pd.NamedAgg(column='gamma', aggfunc='max')
     ).reset_index()
@@ -611,11 +555,10 @@ sofa_cardiovascular_meds.head()
 
 ## Combine the scores from MAP and cardiovascular medication
 sofa_cardiovascular = pd.concat(
-        [sofa_cardiovascular_map, sofa_cardiovascular_meds], sort=False
+        [sofa_cardiovascular_map, sofa_cardiovascular_meds], sort=False,
     ).sort_values(by=['admissionid','time']).reset_index(drop=True)
 
 sofa_cardiovascular.head()
-
 
 ########################
 ## Glasgow Coma Scale score
@@ -643,19 +586,19 @@ verbal_itemids += [19640] # V_EMV_NICE_Opname
 gcs_components = listitems.loc[listitems['itemid'].isin(eyes_itemids)]
 gcs_components['eyes_score'] = 0
 ## Actief openen van de ogen
-gcs_components.loc[gcs_components['itemid'] == 6732, 'eyes_score'] = \
-    5 - gcs_components.loc[gcs_components['itemid'] == 6732, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 6732, 'eyes_score'] = (
+    5 - gcs_components.loc[gcs_components['itemid'] == 6732, 'valueid'])
 ## A_Eye
-gcs_components.loc[gcs_components['itemid'] == 13077, 'eyes_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 13077, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 13077, 'eyes_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 13077, 'valueid'])
 ## RA_Eye, MCA_Eye, E_EMV_NICE_24uur
 gcs_components.loc[
-        gcs_components['itemid'].isin([14470, 16628, 19635]), 'eyes_score'] = \
+        gcs_components['itemid'].isin([14470, 16628, 19635]), 'eyes_score'] = (
     gcs_components.loc[
-        gcs_components['itemid'].isin([14470, 16628, 19635]), 'valueid'] - 4
+        gcs_components['itemid'].isin([14470, 16628, 19635]), 'valueid'] - 4)
 ## E_EMV_NICE_Opname
-gcs_components.loc[gcs_components['itemid'] == 19638, 'eyes_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 19638, 'valueid'] - 8
+gcs_components.loc[gcs_components['itemid'] == 19638, 'eyes_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 19638, 'valueid'] - 8)
 
 ## Preference, ranked by discipline
 gcs_components['preference'] = 8
@@ -666,56 +609,55 @@ gcs_preferences = {
     'ICV_Physician assistant': 4,
     'ICH_Neurochirurgie': 5,
     'ICV_IC-Verpleegkundig': 6,
-    'ICV_MC-Verpleegkundig': 7
-}
+    'ICV_MC-Verpleegkundig': 7}
 gcs_ind = gcs_components['registeredby'].isin(gcs_preferences.keys())
-gcs_components.loc[gcs_ind, 'preference'] = \
-    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences)
+gcs_components.loc[gcs_ind, 'preference'] = (
+    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences))
 gcs_components.sort_values(
     by=['admissionid', 'time', 'preference', 'eyes_score'], inplace=True)
 ## Only keep the lowest score for the discipline of smallest rank
 ## (i.e. ICV_Medisch Staflid supercedes ICV_Medisch etc.)
-gcs_components = \
-    gcs_components.loc[~gcs_components[['admissionid', 'time']].duplicated()]
+gcs_components = gcs_components.loc[
+    ~gcs_components[['admissionid', 'time']].duplicated()]
 gcs_components.drop(
     columns=['itemid', 'valueid', 'value', 'admittedat', 'registeredby'],
     inplace=True)
 
+gcs_cols = ['admissionid', 'measuredat', 'itemid', 'valueid', 'registeredby']
 ## Add GCS motor score
 gcs_components = pd.merge(
     gcs_components,
-    listitems.loc[listitems['itemid'].isin(motor_itemids),
-        ['admissionid', 'measuredat', 'itemid', 'valueid', 'registeredby']],
+    listitems.loc[listitems['itemid'].isin(motor_itemids), gcs_cols],
     on=['admissionid', 'measuredat'],
     how='left')
 gcs_components['motor_score'] = 0
 ## Beste motore reactie van de armen
-gcs_components.loc[gcs_components['itemid'] == 6734, 'motor_score'] = \
-    7 - gcs_components.loc[gcs_components['itemid'] == 6734, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 6734, 'motor_score'] = (
+    7 - gcs_components.loc[gcs_components['itemid'] == 6734, 'valueid'])
 ## A_Motoriek
-gcs_components.loc[gcs_components['itemid'] == 13072, 'motor_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 13072, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 13072, 'motor_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 13072, 'valueid'])
 ## RA_Motoriek, MCA_Motoriek, M_EMV_NICE_24uur
 gcs_components.loc[
-        gcs_components['itemid'].isin([14476, 16634, 19636]), 'motor_score'] = \
+        gcs_components['itemid'].isin([14476, 16634, 19636]), 'motor_score'] = (
     gcs_components.loc[
-        gcs_components['itemid'].isin([14476, 16634, 19636]), 'valueid'] - 6
+        gcs_components['itemid'].isin([14476, 16634, 19636]), 'valueid'] - 6)
 ## M_EMV_NICE_Opname
-gcs_components.loc[gcs_components['itemid'] == 19639, 'motor_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 19639, 'valueid'] - 12
+gcs_components.loc[gcs_components['itemid'] == 19639, 'motor_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 19639, 'valueid'] - 12)
 
 ## As above, add in preference by discipline
 gcs_components['preference'] = 8
 gcs_ind = gcs_components['registeredby'].isin(gcs_preferences.keys())
-gcs_components.loc[gcs_ind, 'preference'] = \
-    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences)
+gcs_components.loc[gcs_ind, 'preference'] = (
+    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences))
 ## Give higher preference by discipline (eye score should be the same for
 ## each admission id+time here)
 gcs_components.sort_values(
     by=['admissionid', 'time', 'preference', 'motor_score'], inplace=True)
 ## Only keep the highest score for the discipline of smallest rank
-gcs_components = \
-    gcs_components.loc[~gcs_components[['admissionid', 'time']].duplicated()]
+gcs_components = gcs_components.loc[
+    ~gcs_components[['admissionid', 'time']].duplicated()]
 gcs_components.drop(columns=['itemid', 'valueid', 'registeredby'], inplace=True)
 ## Motor score is a float (due to pandas merge, so convert to int)
 gcs_components['motor_score'] = gcs_components['motor_score'].astype(int)
@@ -723,40 +665,39 @@ gcs_components['motor_score'] = gcs_components['motor_score'].astype(int)
 ## Add GCS verbal score
 gcs_components = pd.merge(
     gcs_components,
-    listitems.loc[listitems['itemid'].isin(verbal_itemids),
-        ['admissionid', 'measuredat', 'itemid', 'valueid', 'registeredby']],
+    listitems.loc[listitems['itemid'].isin(verbal_itemids), gcs_cols],
     on=['admissionid', 'measuredat'],
     how='left')
 gcs_components['verbal_score'] = 0
 ## Beste verbale reactie
-gcs_components.loc[gcs_components['itemid'] == 6735, 'verbal_score'] = \
-    6 - gcs_components.loc[gcs_components['itemid'] == 6735, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 6735, 'verbal_score'] = (
+    6 - gcs_components.loc[gcs_components['itemid'] == 6735, 'valueid'])
 ## A_Verbal
-gcs_components.loc[gcs_components['itemid'] == 13066, 'verbal_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 13066, 'valueid']
+gcs_components.loc[gcs_components['itemid'] == 13066, 'verbal_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 13066, 'valueid'])
 ## RA_Verbal, MCA_Verbal
 gcs_components.loc[
-        gcs_components['itemid'].isin([14482, 16640]), 'verbal_score'] = \
+        gcs_components['itemid'].isin([14482, 16640]), 'verbal_score'] = (
     gcs_components.loc[
-        gcs_components['itemid'].isin([14482, 16640]), 'valueid'] - 5
+        gcs_components['itemid'].isin([14482, 16640]), 'valueid'] - 5)
 ## V_EMV_NICE_24uur
-gcs_components.loc[gcs_components['itemid'] == 19637, 'verbal_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 19637, 'valueid'] - 9
+gcs_components.loc[gcs_components['itemid'] == 19637, 'verbal_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 19637, 'valueid'] - 9)
 ## V_EMV_NICE_Opname
-gcs_components.loc[gcs_components['itemid'] == 19640, 'verbal_score'] = \
-    gcs_components.loc[gcs_components['itemid'] == 19640, 'valueid'] - 15
+gcs_components.loc[gcs_components['itemid'] == 19640, 'verbal_score'] = (
+    gcs_components.loc[gcs_components['itemid'] == 19640, 'valueid'] - 15)
 
 ## As above, add in preference by discipline
 gcs_components['preference'] = 8
 gcs_ind = gcs_components['registeredby'].isin(gcs_preferences.keys())
-gcs_components.loc[gcs_ind, 'preference'] = \
-    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences)
+gcs_components.loc[gcs_ind, 'preference'] = (
+    gcs_components.loc[gcs_ind, 'registeredby'].replace(gcs_preferences))
 ## Give higher preference by discipline
 gcs_components.sort_values(
     by=['admissionid', 'time', 'preference', 'verbal_score'], inplace=True)
 ## Only keep the highest score for the discipline of smallest rank
-gcs_components = \
-    gcs_components.loc[~gcs_components[['admissionid', 'time']].duplicated()]
+gcs_components = gcs_components.loc[
+    ~gcs_components[['admissionid', 'time']].duplicated()]
 gcs_components.drop(columns=['itemid', 'valueid', 'registeredby'], inplace=True)
 ## Verbal score minimum is 1
 gcs_components.loc[gcs_components['verbal_score'] < 1, 'verbal_score'] = 1
@@ -784,15 +725,14 @@ sofa_cns.loc[(sofa_cns['min_gcs'] < 6), 'sofa_cns_score'] = 4
 
 sofa_cns.head()
 
-
 ########################
 ## Renal score
 
 ## Get urineoutput
 sofa_ruo_itemid = [8794, 8796, 8798, 8800, 8803, 10743, 10745, 19921, 19922]
 ## Dataframe is called sofa_renal_urine_output in amsterdamUMCdb sofa script
-sofa_urine_out = \
-    numerics_sofa.loc[numerics_sofa['itemid'].isin(sofa_ruo_itemid)]
+sofa_urine_out = numerics_sofa.loc[
+    numerics_sofa['itemid'].isin(sofa_ruo_itemid)]
 sofa_urine_out.drop(
     columns=['unitid', 'measuredat', 'islabresult', 'fluidout', 'admittedat'],
     inplace=True)
@@ -827,8 +767,8 @@ baseline_creatinine = numerics_creatinine.groupby(['admissionid']).agg(
         baseline_creatinine=pd.NamedAgg(column='value', aggfunc='min')
     ).reset_index()
 ## Max creatinine on each day (but only from MIN_TIME rather than -365 days)
-max_creatinine = \
-    numerics_creatinine.loc[numerics_creatinine['time'] >= MIN_TIME]
+max_creatinine = numerics_creatinine.loc[
+    numerics_creatinine['time'] >= MIN_TIME]
 max_creatinine = max_creatinine.groupby(['admissionid','time']).agg(
         max_creatinine=pd.NamedAgg(column='value', aggfunc='max')
     ).reset_index()
@@ -840,17 +780,17 @@ creatinine = pd.merge(
 
 creatinine['manual_entry'] = True
 creatinine.loc[systeem_flag(creatinine), 'manual_entry'] = False
-##
+
 creatinine['acute_renal_failure'] = False
-# AKI definition: 3 fold increase
+## AKI definition: 3 fold increase
 creatinine.loc[
         (creatinine['baseline_creatinine'] > 0) &
         (creatinine['max_creatinine'] / creatinine['baseline_creatinine'] > 3),
     'acute_renal_failure'] = True
-# AKI definition: increase to >= 354 umol/l AND at least 44 umol/l increase
+## AKI definition: increase to >= 354 umol/l AND at least 44 umol/l increase
 creatinine.loc[
         (creatinine['max_creatinine'] >= 354) &
-        ((creatinine['max_creatinine'] - \
+        ((creatinine['max_creatinine'] -
             creatinine['baseline_creatinine']) >= 44),
     'acute_renal_failure'] = True
 
@@ -866,8 +806,7 @@ creatinine.head()
 ## (untouched from AmsterdamUMCdb)
 ## Remove extreme outliers, most likely data entry errors (manual_entry = True)
 creatinine.loc[
-        (creatinine['value'] < 30) &
-        creatinine['manual_entry'],
+        (creatinine['value'] < 30) & (creatinine['manual_entry']),
     'value'] = np.nan
 creatinine = creatinine.dropna(subset=['value'])
 
@@ -902,11 +841,10 @@ sofa_renal_creatinine.head()
 
 ## Combine the scores from creatinine and urine output
 sofa_renal = pd.concat(
-        [sofa_renal_creatinine, sofa_daily_urine_out], sort=False#
+        [sofa_renal_creatinine, sofa_daily_urine_out], sort=False,
     ).sort_values(by=['admissionid','time'])
 
 sofa_renal.head()
-
 
 ########################
 ## Final SOFA scores
@@ -915,15 +853,15 @@ sofa_renal.head()
 sofa = admissions_df['admissionid']
 ## Max respiration score
 scores = sofa_respiration.groupby(['admissionid', 'time']).agg(
-    sofa_respiration_score=\
-        pd.NamedAgg(column='sofa_respiration_score', aggfunc='max'))
+    sofa_respiration_score=pd.NamedAgg(
+        column='sofa_respiration_score', aggfunc='max'))
 scores = scores.sort_values(by=['admissionid', 'time']).reset_index()
 sofa = pd.merge(sofa, scores, on='admissionid', how='left')
 
 ## Max coagulation score
 scores = sofa_platelets.groupby(['admissionid', 'time']).agg(
-    sofa_coagulation_score=\
-        pd.NamedAgg(column='sofa_coagulation_score', aggfunc='max'))
+    sofa_coagulation_score=pd.NamedAgg(
+        column='sofa_coagulation_score', aggfunc='max'))
 
 ## We only want to keep columns where the 'day' (24hr periods post-admission)
 ## match, but some 'days' in the new SOFA component score may not be in the
@@ -949,8 +887,8 @@ sofa = join_sofa(sofa, scores)
 
 ## Max cardiovascular score
 scores = sofa_cardiovascular.groupby(['admissionid', 'time']).agg(
-    sofa_cardiovascular_score=\
-        pd.NamedAgg(column='sofa_cardiovascular_score', aggfunc='max'))
+    sofa_cardiovascular_score=pd.NamedAgg(
+        column='sofa_cardiovascular_score', aggfunc='max'))
 sofa = join_sofa(sofa, scores)
 
 ## Max central nervous system score
@@ -965,8 +903,7 @@ sofa = join_sofa(sofa, scores)
 
 ## Calculate total score (add al values in columns)
 total_scores = sofa.set_index(['admissionid','time']).sum(
-    axis=1, skipna=True#
-).to_frame('sofa_total_score')
+    axis=1, skipna=True).to_frame('sofa_total_score')
 sofa = pd.merge(sofa, total_scores, on=['admissionid','time'], how='left')
 sofa.head()
 
@@ -975,9 +912,7 @@ sofa.dropna(subset=['time'], inplace=True)
 ## save as .csv file
 sofa.to_csv(additional_file_path + 'sofa.csv', index=False)
 
-
 ## SOFA scores (as per AmsterdamUMCdb) completed
-
 
 ################################################################################
 ## Next for Sepsis-3 definition is antibiotics escalation
@@ -1024,30 +959,48 @@ antibiotics.loc[30] = [8549, 4] # Belcomycine (Colistinesulfaat) 4 x dgs
 antibiotics.loc[31] = [10584, 4] # Belcomycine (Colistinesulfaat) 6 x dgs
 antibiotics.loc[32] = [20175, 4] # Colistine
 antibiotics.loc[33] = [20176, 4] # Colistine Inhalatie
-antibiotics.loc[34] = [9075, 3] # Fusidinezuur (Fucidin)
+## not included: Fusidinezuur (Fucidin) 9075 - prophylactic after
+##  cardiothoracic surgery
 ## not included: Fusidinezuur oogdruppels (Fusithalmic) 13045 (eye drops)
-antibiotics.loc[35] = [8942, 1] # Metronidazol-Flagyl
-antibiotics.loc[36] = [7187, 1] # Metronidazol (Flagyl)
-antibiotics.loc[37] = [14236, 2] # Nitrofurantoïne ( Furadantine)
-antibiotics.loc[38] = [19137, 4] # Linezolid (Zyvoxid)
-antibiotics.loc[39] = [19773, 4] # Daptomycine (Cubicin)
-antibiotics.loc[40] = [8394, 1] # Co-Trimoxazol (Bactrimel)
-antibiotics.loc[41] = [9052, 1] # Co-trimoxazol forte (Bactrimel)
-## not included: Cefotaxim (Claforan) 6919
-## (Amsterdam UMC do selective digestive decontamination)
+antibiotics.loc[34] = [8942, 1] # Metronidazol-Flagyl
+antibiotics.loc[35] = [7187, 1] # Metronidazol (Flagyl)
+antibiotics.loc[36] = [14236, 2] # Nitrofurantoïne ( Furadantine)
+antibiotics.loc[37] = [19137, 4] # Linezolid (Zyvoxid)
+antibiotics.loc[38] = [19773, 4] # Daptomycine (Cubicin)
+antibiotics.loc[39] = [8394, 1] # Co-Trimoxazol (Bactrimel)
+antibiotics.loc[40] = [9052, 1] # Co-trimoxazol forte (Bactrimel)
+antibiotics.loc[41] = [6919, 2] # Cefotaxim (Claforan)
 
-antibiotics.loc[antibiotics['itemid'].isin([6919,13045,12997,13102,9070,6932]),
-    'itemid'] = np.nan
-antibiotics.dropna(subset=['itemid'], inplace=True)
+## As part of the selective digestive decontamination, patients expected to stay
+## at least 24-48hrs in ICU receive 16 (at least between 10 and 20) doses of
+## cefotaxime across 4 days. If the clinician suspects an infection, this should
+## be switched to  ceftriaxone (which has a similar spectrum). If cefotaxime is
+## continued after these initial doses, assume the clinician has suspected an
+## infection and kept cefotaxime.
+## Similarly, for cardiothoracic surgery patients, antibiotic usage will be
+## prophylactic (vancomycin/fusidinezuur annd cefazolin).
+## Fusidinezuur is always prophylactic, vancomycin prophylactic in day 1.
+## Prophylactic antibiotic usage is picked up again later in the script.
 
 drugitems_abx = drugitems.loc[drugitems['itemid'].isin(antibiotics['itemid'])]
+
+drugitems_abx.loc[
+        (drugitems_abx['stop_time'] <= 4) &
+        (drugitems_abx['itemid'] == 6919),
+    'itemid'] = np.nan
+drugitems_abx.loc[
+        (drugitems_abx['stop_time'] <= 1) &
+        (drugitems_abx['itemid'] == 7064),
+    'itemid'] = np.nan
+drugitems_abx.dropna(subset=['itemid'], inplace=True)
+
 drugitems_abx = pd.merge(
     drugitems_abx, antibiotics[['itemid', 'rank']], on='itemid', how='left')
 drugitems_abx['intravenous'] = drugitems_abx['ordercategoryid'].isin([15,65,55])
 ## Sepsis-3 (Shah et al.) say antibiotics considered on during 24hr period if
 ## administration occurred within 24hr period or within 12hrs before 24hr period
-drugitems_abx['start_time'] = \
-    drugitems_abx['start'] - drugitems_abx['admittedat'] - 1000*60*60*12
+drugitems_abx['start_time'] = (
+    drugitems_abx['start'] - drugitems_abx['admittedat'] - 1000*60*60*12)
 drugitems_abx['start_time'] //= (1000*60*60*24)
 ## The same as before
 drugitems_abx['stop_time'] = drugitems_abx['stop'] - drugitems_abx['admittedat']
@@ -1081,23 +1034,23 @@ drugitems_abx['rank_diff'] = drugitems_abx['max_rank'] - drugitems_abx['rank']
 abx_escalation = drugitems_abx.groupby(['admissionid', 'time']).agg(
         intravenous=pd.NamedAgg(column='intravenous', aggfunc='any'),
         max_rank=pd.NamedAgg(column='rank', aggfunc='max'),
-        n_max_rank=pd.NamedAgg(column='rank_diff',
-            aggfunc=lambda x: (x == 0).sum())
+        n_max_rank=pd.NamedAgg(
+            column='rank_diff', aggfunc=lambda x: (x == 0).sum())
     ).reset_index()
 
 abx_escalation['max_rank_increase'] = (abx_escalation['max_rank'].diff() > 0)
-abx_escalation['n_max_rank_increase'] = \
-    (abx_escalation['n_max_rank'].diff() > 0)
+abx_escalation['n_max_rank_increase'] = (
+    abx_escalation['n_max_rank'].diff() > 0)
 abx_escalation['time_diff'] = abx_escalation['time'].diff()
 ## If two consecutive rows correspond to different patients, then we don't want
 ## antibiotics escalation defined from the first patient to the second!
 abx_escalation.loc[
-    ~abx_escalation['admissionid'].duplicated(),
-        ['max_rank_increase', 'n_max_rank_increase', 'time_diff']] = np.nan
+        (~abx_escalation['admissionid'].duplicated()),
+    ['max_rank_increase', 'n_max_rank_increase', 'time_diff']] = np.nan
 abx_escalation['antibiotic_escalation'] = False
 ## Any new entry is assumed to be the first antibiotics given to that patient
 abx_escalation.loc[
-        ~abx_escalation['admissionid'].duplicated(),
+        (~abx_escalation['admissionid'].duplicated()),
     'antibiotic_escalation'] = True
 abx_escalation.loc[
         (abx_escalation['max_rank_increase'] > 0) |
@@ -1118,18 +1071,18 @@ abx_escalation.drop(
 sepsis = pd.concat([sofa, abx_escalation[['admissionid', 'time']]])
 sepsis = sepsis.loc[~sepsis[['admissionid', 'time']].duplicated()]
 sepsis = sepsis.sort_values(by=['admissionid', 'time']).reset_index(drop=True)
-sepsis.loc[sepsis['sofa_total_score'].isna() & (sepsis['time'] < 0),
+sepsis.loc[
+        sepsis['sofa_total_score'].isna() & (sepsis['time'] < 0),
     'sofa_total_score'] = 0
 sepsis = sepsis.dropna(subset=['time']).reset_index(drop=True)
 
 ## Shah et al. (DOI: 10.1097/CCM.0000000000005169) in Sepsis-3 review
 ## remove any patients with less than 3 SOFA scores in the first 24hrs,
 ## mark these patients in case we want to do the same
-sepsis['n_sofa_scores'] = sepsis[
-        ['sofa_respiration_score', 'sofa_coagulation_score',
-        'sofa_liver_score', 'sofa_cardiovascular_score',
-        'sofa_cns_score', 'sofa_renal_score']
-    ].notna().sum(axis=1)
+sofa_components = ['sofa_respiration_score', 'sofa_coagulation_score']
+sofa_components += ['sofa_liver_score', 'sofa_cardiovascular_score']
+sofa_components += ['sofa_cns_score', 'sofa_renal_score']
+sepsis['n_sofa_scores'] = sepsis[sofa_components].notna().sum(axis=1)
 
 sepsis['discard'] = False
 sepsis.loc[
@@ -1156,149 +1109,50 @@ sepsis[['sofa_diff1', 'sofa_diff2']] = np.nan
 ## Change in SOFA between current and subsequent 24hr periods
 sepsis['sofa_diff1'].iloc[:-1] = sepsis['sofa_diff0'].iloc[1:]
 ## Change in SOFA between previous and subsequent 24hr periods
-sepsis['sofa_diff2'].iloc[:-1] = \
-    sepsis['sofa_total_score'].diff(periods=2).iloc[1:]
+sepsis['sofa_diff2'].iloc[:-1] = (
+    sepsis['sofa_total_score'].diff(periods=2).iloc[1:])
 
 ## If this is the first entry for the patient, then there is no 'previous day'
 ## So the difference in these cases is simply the (total score - 0)
 ## (we assume a SOFA score of 0 on admission)
-sepsis.loc[~sepsis['admissionid'].duplicated(), ['sofa_diff0', 'sofa_diff2']] =\
-    sepsis.loc[~sepsis['admissionid'].duplicated(), 'sofa_total_score']
+sepsis.loc[~sepsis['admissionid'].duplicated(), ['sofa_diff0', 'sofa_diff2']] =(
+    sepsis.loc[~sepsis['admissionid'].duplicated(), 'sofa_total_score'])
 ## On the last day for that patient, sofa_diff1 and sofa_diff2 should not exist
-sepsis.loc[~sepsis['admissionid'].duplicated(keep='last'), \
+sepsis.loc[
+        (~sepsis['admissionid'].duplicated(keep='last')),
     ['sofa_diff1', 'sofa_diff2']] = np.nan
 
 ## A sepsis episode is defined as antibiotics escalation ('infection')
 ## accompanied by SOFA increase of 2 or more.
-sepsis['sepsis_episode'] = \
-    (sepsis['antibiotic_escalation'] &
+sepsis['sepsis_episode'] = (
+    (sepsis['antibiotic_escalation']) &
     ((sepsis['sofa_diff0'] >= 2) |
         (sepsis['sofa_diff1'] >= 2) |
-        (sepsis['sofa_diff2'] >= 2)#
-    ))
+        (sepsis['sofa_diff2'] >= 2)))
 
 ## Next: find patients who had elective surgery, these may have been given
 ## antibiotics for prophylactic use in the first 24hr after admission
 ## and are not classified as sepsis even if having a high SOFA score
 ## (subsequent antibiotic escalation and SOFA increase is marked as sepsis)
-## Get itemids for diagnosis related variables (via AmsterdamUMCdb script)
-surgery_itemid = [13116] # D_Thoraxchirurgie_CABG en Klepchirurgie
-surgery_itemid += [16671] # DMC_Thoraxchirurgie_CABG en Klepchirurgie
-surgery_itemid += [13117] # D_Thoraxchirurgie_Cardio anders
-surgery_itemid += [16672] # DMC_Thoraxchirurgie_Cardio anders
-surgery_itemid += [13118] # D_Thoraxchirurgie_Aorta chirurgie
-surgery_itemid += [16670] # DMC_Thoraxchirurgie_Aorta chirurgie
-surgery_itemid += [13119] # D_Thoraxchirurgie_Pulmonale chirurgie
-surgery_itemid += [16673] # DMC_Thoraxchirurgie_Pulmonale chirurgie
-## Not surgical: 13141 # D_Algemene chirurgie_Algemeen
-## Not surgical: 16642 # DMC_Algemene chirurgie_Algemeen
-surgery_itemid += [13121] # D_Algemene chirurgie_Buikchirurgie
-surgery_itemid += [16643] # DMC_Algemene chirurgie_Buikchirurgie
-surgery_itemid += [13123] # D_Algemene chirurgie_Endocrinologische chirurgie
-surgery_itemid += [16644] # DMC_Algemene chirurgie_Endocrinologische chirurgie
-surgery_itemid += [13145] # D_Algemene chirurgie_KNO/Overige
-surgery_itemid += [16645] # DMC_Algemene chirurgie_KNO/Overige
-surgery_itemid += [13125] # D_Algemene chirurgie_Orthopedische chirurgie
-surgery_itemid += [16646] # DMC_Algemene chirurgie_Orthopedische chirurgie
-surgery_itemid += [13122] # D_Algemene chirurgie_Transplantatie chirurgie
-surgery_itemid += [16647] # DMC_Algemene chirurgie_Transplantatie chirurgie
-surgery_itemid += [13124] # D_Algemene chirurgie_Trauma
-surgery_itemid += [16648] # DMC_Algemene chirurgie_Trauma
-surgery_itemid += [13126] # D_Algemene chirurgie_Urogenitaal
-surgery_itemid += [16649] # DMC_Algemene chirurgie_Urogenitaal
-surgery_itemid += [13120] # D_Algemene chirurgie_Vaatchirurgie
-surgery_itemid += [16650] # DMC_Algemene chirurgie_Vaatchirurgie
-surgery_itemid += [13128] # D_Neurochirurgie _Vasculair chirurgisch
-surgery_itemid += [16661] # DMC_Neurochirurgie _Vasculair chirurgisch
-surgery_itemid += [13129] # D_Neurochirurgie _Tumor chirurgie
-surgery_itemid += [16660] # DMC_Neurochirurgie _Tumor chirurgie
-surgery_itemid += [13130] # D_Neurochirurgie_Overige
-surgery_itemid += [16662] # DMC_Neurochirurgie_Overige
-surgery_itemid += [18596] # Apache II Operatief  Gastr-intenstinaal
-surgery_itemid += [18597] # Apache II Operatief Cardiovasculair
-surgery_itemid += [18598] # Apache II Operatief Hematologisch
-surgery_itemid += [18599] # Apache II Operatief Metabolisme
-surgery_itemid += [18600] # Apache II Operatief Neurologisch
-surgery_itemid += [18601] # Apache II Operatief Renaal
-surgery_itemid += [18602] # Apache II Operatief Respiratoir
-surgery_itemid += [17008] # APACHEIV Post-operative cardiovascular
-surgery_itemid += [17009] # APACHEIV Post-operative gastro-intestinal
-surgery_itemid += [17010] # APACHEIV Post-operative genitourinary
-surgery_itemid += [17011] # APACHEIV Post-operative hematology
-surgery_itemid += [17012] # APACHEIV Post-operative metabolic
-surgery_itemid += [17013] # APACHEIV Post-operative musculoskeletal /skin
-surgery_itemid += [17014] # APACHEIV Post-operative neurologic
-surgery_itemid += [17015] # APACHEIV Post-operative respiratory
-surgery_itemid += [17016] # APACHEIV Post-operative transplant
-surgery_itemid += [17017] # APACHEIV Post-operative trauma
-surgery_itemid += [18669] # NICE APACHEII diagnosen
-surgery_itemid += [18671] # NICE APACHEIV diagnosen
-
-surgery = listitems.loc[listitems['itemid'].isin(surgery_itemid), :]
-## There seem to be problems with the timestamps for items registered under
-## 'ICV_Medisch Staflid'
-surgery = surgery.loc[surgery['registeredby'] != 'ICV_Medisch Staflid']
-surgery['surgical'] = surgery['itemid'].isin(surgery_itemid) * 1
-## Via AmsterdamUMCdb 'reason for admission' script (remove surgical)
-surgery.loc[
-        surgery['itemid'].isin([18669]) &
-        ~((surgery['valueid'] >= 1) & (surgery['valueid'] <= 26)),
-    'surgical'] = np.nan
-surgery.loc[
-        surgery['itemid'].isin([18671]) &
-        ~((surgery['valueid'] >= 222) & (surgery['valueid'] <= 452)),
-    'surgical'] = np.nan
-surgery.dropna(subset=['surgical'], inplace=True)
-
-surgery.sort_values(by=['admissionid', 'time'], inplace=True)
-
-## It's a problem if they were discharged before the surgery time, so flag this
-surgery['flag'] = (surgery['dischargedat'] < surgery['measuredat'])
-surgery = pd.merge(
-    surgery, admissions_df[['admissionid', 'urgency']],
-    on='admissionid', how='left')
-
-## Urgency = 1 is emergency surgery, urgency = 0 is elective surgery
-## If patients entered ICU after elective surgery but subsequently had further
-## surgery after 48hrs, we assume the further surgery is unplanned
-surgery = pd.merge(
-    surgery,
-    surgery.groupby('admissionid').agg(
-            min_time=pd.NamedAgg(column='time', aggfunc='min')
-        ).reset_index(),
-    on='admissionid', how='left')
-
-surgery.loc[
-        (surgery['time'] > 1) &
-        (surgery['time'] > surgery['min_time']),
-    'urgency'] = 1
-
-surgery_add = surgery.loc[surgery['flag'] == 0]
-surgery_add = surgery_add[['admissionid', 'time', 'urgency']]
-surgery_add = surgery_add.loc[~surgery_add.duplicated()]
-sepsis = pd.merge(sepsis, surgery_add, on=['admissionid','time'], how='left')
-## Currently urgency = 0 is elective surgery, urgency = 1 is emergency surgery
-## and urgency = nan (i.e. the admissionid/time was not in surgery_add
-## dataframe)
-sepsis['emergency_surgery'] = (sepsis['urgency'] == 1)
-sepsis['emergency_surgery'] = sepsis['emergency_surgery'].fillna(value=0)
-sepsis['emergency_surgery'] = sepsis['emergency_surgery'].astype(int)
-
-sepsis['elective_surgery'] = (sepsis['urgency'] == 0)
-## Replace missing data with 0 (as no surgery = no elective surgery)
-sepsis['elective_surgery'] = sepsis['elective_surgery'].fillna(value=0)
-sepsis['elective_surgery'] = sepsis['elective_surgery'].astype(int)
-sepsis.drop(columns=['urgency'], inplace=True)
+surgical_cols = ['admissionid', 'surgical', 'urgency']
+sepsis = pd.merge(
+    sepsis, combined_diagnoses[surgical_cols], on='admissionid', how='left')
+sepsis['elective_surgery'] = (
+    (sepsis['surgical'] == 1) &
+    (sepsis['urgency'] == 0))
+sepsis['emergency_surgery'] = (
+    (sepsis['surgical'] == 1) &
+    (sepsis['urgency'] == 1))
 
 ## Assume prophylactic treatment rather than sepsis if elective surgery
 ## accompanied by high SOFA/antibiotics (including a day after)
-sepsis['prophylaxis'] = sepsis['sepsis_episode'] & sepsis['elective_surgery']
-sepsis['prophylaxis'].iloc[:-1] |= \
+sepsis['prophylaxis'] = (sepsis['sepsis_episode'] & sepsis['elective_surgery'])
+sepsis['prophylaxis'].iloc[:-1] |= (
     (sepsis['sepsis_episode'].iloc[:-1] &
-    sepsis.loc[1:,'elective_surgery'].values)
+    (sepsis.loc[1:,'elective_surgery'].values)))
 ## If prophylaxis is assumed, then not a sepsis episode
 sepsis['sepsis_episode'] &= ~sepsis['prophylaxis']
-sepsis['infection'] = sepsis['antibiotic_escalation'] & ~sepsis['prophylaxis']
+sepsis['infection'] = (sepsis['antibiotic_escalation'] & ~sepsis['prophylaxis'])
 
 ## Lactate (for septic shock: max lactate of 2mmol/L + cardiovascular SOFA
 ## score of >=3 which corresponds to use of vasopressors)
@@ -1313,26 +1167,17 @@ sepsis = pd.merge(
     sepsis, lactate_max[['admissionid', 'time', 'max_lactate']],
     on=['admissionid', 'time'], how='left')
 
-sepsis['septic_shock'] = \
+sepsis['septic_shock'] = (
     (sepsis['sepsis_episode'] &
     (sepsis['max_lactate'] > 2) &
-    (sepsis['sofa_cardiovascular_score'] >= 3))
-
+    (sepsis['sofa_cardiovascular_score'] >= 3)))
 
 ## This gives a binary variable for each patient if they had at least one
 ## sepsis episode.
 sepsis_patients = sepsis.groupby(['admissionid']).agg(
         sepsis=pd.NamedAgg(column='sepsis_episode', aggfunc='any'),
-        septic_shock=pd.NamedAgg(column='septic_shock', aggfunc='any')#
+        septic_shock=pd.NamedAgg(column='septic_shock', aggfunc='any')
     ).reset_index()
-
-## Finally we can do the similar but for a sepsis episode between days n0 and n1
-## e.g.
-# sepsis.loc[(sepsis['time'] >= 0) & (sepsis['time'] <= 2)\
-#     ].groupby(['admissionid']).agg(\
-#             sepsis=pd.NamedAgg(column='sepsis_episode', aggfunc='any'),
-#             septic_shock=pd.NamedAgg(column='septic_shock', aggfunc='any') \
-#         ).reset_index()
 
 sepsis_cols = ['admissionid', 'time', 'sofa_total_score']
 sepsis_cols += ['antibiotic_escalation', 'prophylaxis']
