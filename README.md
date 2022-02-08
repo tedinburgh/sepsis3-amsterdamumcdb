@@ -18,3 +18,7 @@ This will create additional .csv files in a new folder `data/additional_files`. 
 + `sepsis3.csv` contains total SOFA score, antibiotic escalation, prophylactic antibiotic usage, suspected infection and Sepsis-3 diagnosis (including septic shock) for each admission, daily.
 + `combined_diagnoses.csv` is a pandas rewrite of the [AmsterdamUMCdb reason for admission SQL code](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/concepts/diagnosis/reason_for_admission.ipynb).
 + `sepsis3_latex_tables.txt` is a text file containing the LaTeX code for tables included in the manuscript accompanying this work.
+
+The database is primarily in Dutch. It is generally easier to work with itemids rather than the (Dutch) item names, in any table. The database contains a lookup dictionary of all terms, instructions for installing the `amsterdamumcdb` package that contains is given [here](https://github.com/AmsterdamUMC/AmsterdamUMCdb/tree/master/setup-amsterdamumcdb). It may be worth familiarising yourself with some common terms (e.g. Neurochirurgie = Neurosurgery, Vaatchirurgie = Vascular Surgery) ahead of time.
+
+We encourage other researchers (or anyone interested in this code from a data or clinical perspective) to submit an [issue](https://github.com/tedinburgh/sepsis3-amsterdamumcdb/issues) on this repository if they would like to report or fix any bugs or to contribute improvements.
