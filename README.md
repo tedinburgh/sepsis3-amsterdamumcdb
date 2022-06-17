@@ -13,7 +13,7 @@ python sepsis3_amsterdamumcdb.py
 python sepsis_comparison.py
 ```
 
-This will create additional .csv files in a new folder `data/additional_files`. These data files cannot be included in this repository 
+This will create additional .csv files in a new folder `data/additional_files`. These data files will be created in this repository:
 + `sofa.csv` contains daily SOFA scores (component and total scores) for each admission. This is based on [AmsterdamUMCdb SOFA score SQL code](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/concepts/severityscores/sofa.ipynb), but is written using pandas from the base .csv data files.
 + `sepsis3.csv` contains total SOFA score, antibiotic escalation, prophylactic antibiotic usage, suspected infection and Sepsis-3 diagnosis (including septic shock) for each admission, daily.
 + `combined_diagnoses.csv` is a pandas rewrite of the [AmsterdamUMCdb reason for admission SQL code](https://github.com/AmsterdamUMC/AmsterdamUMCdb/blob/master/concepts/diagnosis/reason_for_admission.ipynb).
