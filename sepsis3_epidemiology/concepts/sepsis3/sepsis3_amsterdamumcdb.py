@@ -1203,11 +1203,18 @@ drugitems_abx['stop_time'] //= (1000*60*60*24)
 # (i.e. make an entry for each 'day' tha the drug administration window
 # overlaps with)
 n_days = drugitems_abx['stop_time'] - drugitems_abx['start_time'] + 1
-drugitems_abx = drugitems_abx.loc[
-    drugitems_abx.index.repeat(n_days)].reset_index(drop=True)
+drugitems_abx = drugitems_abx.loc[drugitems_abx.index.repeat(n_days)]
+drugitems_abx['new_entry'] = (drugitems_abx.index.duplicated() == 0)
+drugitems_abx = drugitems_abx.reset_index(drop=True)
 drugitems_abx['time'] = np.hstack([np.arange(x) for x in n_days])
 drugitems_abx['time'] += drugitems_abx['start_time']
 drugitems_abx = drugitems_abx.loc[drugitems_abx['time'] <= MAX_TIME]
+
+# drugitems_abx.groupby(['admissionid', 'time', 'itemid'])
+# drugitems_abx['start_diff_hrs'] = (
+#     drugitems_abx['start'].diff() / (1000*60*60))
+# drugitems_abx.loc[(
+#     drugitems_abx['start_diff_hrs'] < 1/60), 'start_diff_hrs'] = np.nan
 
 drugitems_abx['prophylactic'] = False
 
@@ -1318,6 +1325,29 @@ abx_escalation.drop(
     inplace=True)
 
 abx_escalation['antibiotics_any'] = True
+
+drugitems_abx_all['time-1'] = (drugitems_abx_all['time'] - 1)
+next_day_abx = drugitems_abx_all[['admissionid', 'time-1']].groupby(
+    ['admissionid', 'time-1']).size().reset_index()
+next_day_abx.rename(columns={'time-1': 'time'}, inplace=True)
+next_day_abx['next_day_abx'] = (next_day_abx[0] > 0)
+next_day_abx.drop(columns=[0], inplace=True)
+abx_escalation = pd.merge(
+    abx_escalation, next_day_abx, on=['admissionid', 'time'], how='left')
+abx_escalation['next_day_abx'] = abx_escalation['next_day_abx'].fillna(False)
+
+abx_escalation = pd.merge(
+    abx_escalation, admissions_df[['admissionid', 'lengthofstay']],
+    on='admissionid', how='left')
+
+# Optional: Antibiotic escalation only if antitbioics are continued on the
+# next day. Potentially a sensitivity analysis?
+# abx_escalation['departure_day'] = (
+#     abx_escalation['lengthofstay'] // 24 <= abx_escalation['time'])
+# abx_escalation.loc[(
+#         (abx_escalation['next_day_abx'] == 0) &
+#         (abx_escalation['departure_day'] == 0)),
+#     'antibiotic_escalation'] = False
 
 ###############################################################################
 # Now we are in a position to compute sepsis episodes according to the Sepsis-3
@@ -1441,6 +1471,7 @@ sepsis.loc[(
 # A sepsis episode is defined as antibiotics escalation ('infection')
 # accompanied by SOFA increase of 2 or more.
 sepsis['sepsis_episode'] = (
+    (sepsis['intravenous'] == 1) &
     (sepsis['antibiotic_escalation'] == 1) &
     ((sepsis['sofa_diff0'] >= 2) |
         (sepsis['sofa_diff1'] >= 2) |

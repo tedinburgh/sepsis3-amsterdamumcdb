@@ -446,7 +446,8 @@ for unit_type in ['icu', 'mcu']:
             ax=ax[1, 0], ls=(0, (7, 1)), kmf=kmf,
             label='Max SOFA >15', color=Dark2_6_hex[4])
         ax[1, 0].set_title(
-            '(c) Septic shock\nby admission SOFA score',
+            '(c) Survival curves for patients\nwith septic shock\n' +
+            'by admission SOFA score',
             fontsize=10)
         ax[1, 0].set_xlabel('Time since admission (d)')
         ax[1, 0].set_ylim([0, 1])
@@ -490,7 +491,8 @@ for unit_type in ['icu', 'mcu']:
             ax=ax[1, 1], ls=(0, (7, 1)), kmf=kmf,
             label='Max SOFA >15', color=Dark2_6_hex[4])
         ax[1, 1].set_title(
-            '(d) Sepsis without shock\nby admission SOFA score',
+            '(d) Survival curves for patients\nwith sepsis without shock\n' +
+            'by admission SOFA score',
             fontsize=10)
         ax[1, 1].set_ylabel('Survival probability')
         ax[1, 1].set_xlabel('Time since admission (d)')
@@ -535,7 +537,8 @@ for unit_type in ['icu', 'mcu']:
             ax=ax[2, 0], ls=(0, (7, 1)), kmf=kmf,
             label='Max SOFA >15', color=Dark2_6_hex[4])
         ax[2, 0].set_title(
-            '(e) Antibiotics without sepsis\nby admission SOFA score',
+            '(e) Survival curves for patients\nreceiving antibiotics without' +
+            'sepsis\nby admission SOFA score',
             fontsize=10)
         ax[2, 0].set_ylabel('Survival probability')
         ax[2, 0].set_xlabel('Time since admission (d)')
@@ -580,7 +583,8 @@ for unit_type in ['icu', 'mcu']:
             ax=ax[2, 1], ls=(0, (7, 1)), kmf=kmf,
             label='Max SOFA >15', color=Dark2_6_hex[4])
         ax[2, 1].set_title(
-            '(f) No antibiotics\nby admission SOFA score',
+            '(f) Survival curves for patients\nnot receiving antibiotics\n' +
+            'by admission SOFA score',
             fontsize=10)
         ax[2, 1].set_xlabel('Time since admission (d)')
         ax[2, 1].set_ylim([0, 1])

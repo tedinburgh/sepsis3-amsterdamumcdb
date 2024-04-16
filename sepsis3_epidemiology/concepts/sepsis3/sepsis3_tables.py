@@ -601,8 +601,11 @@ antibiotics_add.loc[(
         (antibiotics_add['admissionid'].duplicated() == 0) &
         (antibiotics_add['time'] == 0)),
     'time_diff'] = 1
+antibiotics_add.loc[(
+        (antibiotics_add['admissionid'].duplicated() == 0) &
+        (antibiotics_add['time'] > 0)),
+    'time_diff'] = np.nan
 antibiotics_add = antibiotics_add.groupby('admissionid').agg(
-        n_days_total_abx=pd.NamedAgg(column='time', aggfunc='nunique'),
         n_days_consecutive_start_abx=pd.NamedAgg(
             column='time_diff', aggfunc=lambda x: x.cumsum(skipna=False).max())
     ).reset_index()
@@ -610,27 +613,34 @@ antibiotics_add['n_days_consecutive_start_abx'] = (
     antibiotics_add['n_days_consecutive_start_abx'].fillna(0).astype(int))
 descriptors = pd.merge(
     descriptors, antibiotics_add, on='admissionid', how='left')
-descriptors['antibiotics_min_4d_start'] = (
-    (descriptors['n_days_consecutive_start_abx'] >= 4)).fillna(False)
-descriptors['antibiotics_min_4d_departure'] = (
-    (descriptors['n_days_total_abx'] >= 4) |
-    (descriptors['n_days_total_abx'] == (
-            1 + (descriptors['lengthofstay'] // 24)))).fillna(False)
-descriptors['antibiotics_min_4d_death'] = (
-    (descriptors['n_days_total_abx'] >= 4) |
-    ((descriptors['n_days_total_abx'] == (  # number of days in ICU
+# There are some weird artefacts of discretising antibiotics into days (24hr
+# periods) and from adjusting the end time by 12hrs to follow Shah.
+# This means that a patient may be marked as having 4 consecutive days of
+# antibiotics even if their length of stay is only e.g. 61 hours (since
+# 61 + 12 = 73, which covers 4x 24hr periods)
+# descriptors['antibiotics_min_4d_start'] = (
+#     (descriptors['n_days_consecutive_start_abx'] >= 4)).fillna(False)
+descriptors['antibiotics_min_4d'] = (
+    (descriptors['n_days_consecutive_start_abx'] >= 4) &
+    (descriptors['lengthofstay'] >= 4*24))
+descriptors['antibiotics_to_departure_max_los_4d'] = (
+    (descriptors['n_days_consecutive_start_abx'] >= (
             1 + (descriptors['lengthofstay'] // 24))) &
-        (descriptors['overleden_IC'] == 1))).fillna(False)
-descriptors.loc[
-    descriptors['lengthofstay'] < 4*24, 'antibiotics_min_4d_death'] = False
-descriptors['discharge_less_4d'] = (
-    (descriptors['lengthofstay'] < 4*24) &
-    (descriptors['overleden_IC'] == 0)).fillna(False)
+    (descriptors['lengthofstay'] < 4*24))
+descriptors['antibiotics_min_4d_departure'] = (
+    (descriptors['antibiotics_min_4d'] == 1) |
+    (descriptors['antibiotics_to_departure_max_los_4d'] == 1))
+descriptors['antibiotics_to_death_max_los_4d'] = (
+    (descriptors['overleden_IC'] == 1) &
+    (descriptors['antibiotics_to_departure_max_los_4d'] == 1))
+descriptors['antibiotics_to_discharge_max_los_4d'] = (
+    (descriptors['overleden_IC'] == 0) &
+    (descriptors['antibiotics_to_departure_max_los_4d'] == 1))
+descriptors['antibiotics_min_4d_death'] = (
+    (descriptors['antibiotics_min_4d'] == 1) |
+    (descriptors['antibiotics_to_death_max_los_4d'] == 1))
 descriptors['antibiotics_less_4d'] = (
-    (descriptors['antibiotics_min_4d_death'] == 0) &
-    (descriptors['discharge_less_4d'] == 0))
-descriptors.drop(
-    columns=['n_days_consecutive_start_abx', 'n_days_total_abx'], inplace=True)
+    descriptors['antibiotics_min_4d_departure'] == 0)
 
 mv_bool = mechanical_ventilation['mv_bool']
 descriptors['mechanical_ventilation'] = descriptors['admissionid'].isin(
@@ -748,11 +758,12 @@ table_setup.loc[demographic_index, 'category'] = 'demographic'
 demographic_index.insert(1, 'Age group, n (%)')
 
 admission_cat_index = ['Elective surgical', 'Emergency surgical']
-admission_cat_index += ['Emergency medical']
+admission_cat_index += ['Emergency medical', 'Septic shock on admission']
 # admission_cat_index += ['Unknown']
 table_setup.loc['Elective surgical', 'column'] = 'elective_surgical'
 table_setup.loc['Emergency surgical', 'column'] = 'emergency_surgical'
 table_setup.loc['Emergency medical', 'column'] = 'emergency_medical'
+table_setup.loc['Septic shock on admission', 'column'] = 'septic_shock'
 # table_setup.loc['Repeat admission', 'column'] = 'repeat_admission'
 # table_setup.loc['Unknown', 'column'] = 'unknown_surgical_medical'
 table_setup.loc[admission_cat_index, 'function'] = n_fun
@@ -828,18 +839,15 @@ table_setup.loc['Mechanical ventilation, n (%)', 'function'] = n_fun
 table_setup.loc[physiology_index, 'category'] = 'physiology'
 
 outcomes_index = ['Antibiotic escalation, first 24hr, n (%)']
-outcomes_index += ['IV antibiotics for first 4d (*), n (%)']
-outcomes_index += ['IV antibiotics for at least 4d (**), n (%)']
+# outcomes_index += ['IV antibiotics for first 4d (*), n (%)']
+outcomes_index += ['IV antibiotics for at least 4d (*), n (%)']
 outcomes_index += ['ICU length of stay, h, median (IQR)']
 outcomes_index += ['ICU mortality, n (%)']
 table_setup.loc[
     'Antibiotic escalation, first 24hr, n (%)',
     'column'] = 'antibiotic_escalation'
 table_setup.loc[
-    'IV antibiotics for first 4d (*), n (%)',
-    'column'] = 'antibiotics_min_4d_start'
-table_setup.loc[
-    'IV antibiotics for at least 4d (**), n (%)',
+    'IV antibiotics for at least 4d (*), n (%)',
     'column'] = 'antibiotics_min_4d_departure'
 table_setup.loc[
     'ICU length of stay, h, median (IQR)', 'column'] = 'lengthofstay'
@@ -858,20 +866,18 @@ table_index += ['', 'Outcomes'] + outcomes_index
 tableI_columns = ['Overall', 'Septic shock', 'Sepsis without shock']
 tableI_columns += ['Antibiotics without sepsis', 'Not on antibiotics']
 
-tableI = pd.DataFrame('', columns=tableI_columns, index=table_index)
+tableI_index = table_index.copy()
+tableI_index.remove('Septic shock on admission')
+
+tableI = pd.DataFrame('', columns=tableI_columns, index=tableI_index)
 missingnessI = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableI_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
         temp_col = table_setup.loc[row, 'column']
         tableI.loc[row, 'Overall'] = temp_fun(
             descriptors.loc[descriptors['location_IC'], temp_col])
-        # tableI.loc[row, 'Sepsis'] = temp_fun(
-        #     descriptors.loc[(
-        #             descriptors['sepsis'] &
-        #             descriptors['location_IC']),
-        #         temp_col])
         tableI.loc[row, 'Septic shock'] = temp_fun(
             descriptors.loc[(
                     descriptors['septic_shock'] &
@@ -898,16 +904,14 @@ for row in table_index:
             (descriptors['location_IC']), temp_col].isna().mean() * 100
 
 # All admissions
-tableIa = pd.DataFrame('', columns=tableI_columns, index=table_index)
+tableIa = pd.DataFrame('', columns=tableI_columns, index=tableI_index)
 missingnessIa = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableI_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
         temp_col = table_setup.loc[row, 'column']
         tableIa.loc[row, 'Overall'] = temp_fun(descriptors.loc[:, temp_col])
-        # tableIa.loc[row, 'Sepsis'] = temp_fun(
-        #     descriptors.loc[descriptors['sepsis'], temp_col])
         tableIa.loc[row, 'Septic shock'] = temp_fun(
             descriptors.loc[descriptors['septic_shock'], temp_col])
         tableIa.loc[row, 'Sepsis without shock'] = temp_fun(
@@ -922,20 +926,15 @@ for row in table_index:
             temp_col].isna().mean() * 100
 
 # MCU stays
-tableIb = pd.DataFrame('', columns=tableI_columns, index=table_index)
+tableIb = pd.DataFrame('', columns=tableI_columns, index=tableI_index)
 missingnessIb = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableI_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
         temp_col = table_setup.loc[row, 'column']
         tableIb.loc[row, 'Overall'] = temp_fun(
             descriptors.loc[~descriptors['location_IC'], temp_col])
-        # tableIb.loc[row, 'Sepsis'] = temp_fun(
-        #     descriptors.loc[(
-        #             descriptors['sepsis'] &
-        #             ~descriptors['location_IC']),
-        #         temp_col])
         tableIb.loc[row, 'Septic shock'] = temp_fun(
             descriptors.loc[(
                     descriptors['septic_shock'] &
@@ -962,20 +961,15 @@ for row in table_index:
             (~descriptors['location_IC']), temp_col].isna().mean() * 100
 
 # Sensitivity analysis: excluding noradrenaline
-tableIc = pd.DataFrame('', columns=tableI_columns, index=table_index)
+tableIc = pd.DataFrame('', columns=tableI_columns, index=tableI_index)
 missingnessIc = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableI_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
         temp_col = table_setup.loc[row, 'column']
         tableIc.loc[row, 'Overall'] = temp_fun(
             descriptors.loc[descriptors['location_IC'], temp_col])
-        # tableIc.loc[row, 'Sepsis'] = temp_fun(
-        #     descriptors.loc[(
-        #             descriptors['sepsis_noradrenaline'] &
-        #             descriptors['location_IC']),
-        #         temp_col])
         tableIc.loc[row, 'Septic shock'] = temp_fun(
             descriptors.loc[(
                     descriptors['septic_shock_noradrenaline'] &
@@ -1002,20 +996,15 @@ for row in table_index:
             (descriptors['location_IC']), temp_col].isna().mean() * 100
 
 # Sensitivity analysis: cultures and antibiotics for suspected infection
-tableId = pd.DataFrame('', columns=tableI_columns, index=table_index)
+tableId = pd.DataFrame('', columns=tableI_columns, index=tableI_index)
 missingnessId = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableI_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
         temp_col = table_setup.loc[row, 'column']
         tableId.loc[row, 'Overall'] = temp_fun(
             descriptors.loc[descriptors['location_IC'], temp_col])
-        # tableId.loc[row, 'Sepsis'] = temp_fun(
-        #     descriptors.loc[(
-        #             descriptors['sepsis_cultures'] &
-        #             descriptors['location_IC']),
-        #         temp_col])
         tableId.loc[row, 'Septic shock'] = temp_fun(
             descriptors.loc[(
                     descriptors['septic_shock_cultures'] &
@@ -1047,9 +1036,11 @@ tableSII_columns += ['Discharged from ICU after < 4 days']
 tableSII_columns += ['Antibiotics for < 4 days']
 tableSII_columns += ['Overall (all patients with sepsis on admission)']
 
-tableSII = pd.DataFrame('', columns=tableSII_columns, index=table_index)
+tableSII_index = table_index.copy()
+tableSII_index.remove('Antibiotic escalation, first 24hr, n (%)')
+tableSII = pd.DataFrame('', columns=tableSII_columns, index=tableSII_index)
 missingnessSII = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableSII_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
@@ -1072,14 +1063,13 @@ for row in table_index:
             descriptors.loc[(
                     descriptors['location_IC'] &
                     descriptors['sepsis'] &
-                    descriptors['discharge_less_4d']),
+                    descriptors['antibiotics_to_discharge_max_los_4d']),
                 temp_col])
         tableSII.loc[row, 'Antibiotics for < 4 days'] = temp_fun(
             descriptors.loc[(
                     descriptors['location_IC'] &
                     descriptors['sepsis'] &
-                    (descriptors['antibiotics_less_4d'] |
-                        descriptors['discharge_less_4d'])),
+                    descriptors['antibiotics_less_4d']),
                 temp_col])
         missingnessSII.loc[row, 'Missing, n'] = (
             descriptors.loc[
@@ -1091,11 +1081,9 @@ for row in table_index:
             ).isna().mean() * 100
 
 # All admissions
-tableSII_index = table_index.copy()
-tableSII_index.remove('Antibiotic escalation, first 24hr, n (%)')
-tableSIIa = pd.DataFrame('', columns=tableSII_columns, index=table_index)
+tableSIIa = pd.DataFrame('', columns=tableSII_columns, index=tableSII_index)
 missingnessSIIa = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableSII_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
@@ -1113,7 +1101,7 @@ for row in table_index:
         tableSIIa.loc[row, temp_table_col] = temp_fun(
             descriptors.loc[(
                     descriptors['sepsis'] &
-                    descriptors['discharge_less_4d']),
+                    descriptors['antibiotics_to_discharge_max_los_4d']),
                 temp_col])
         tableSIIa.loc[row, 'Antibiotics for < 4 days'] = temp_fun(
             descriptors.loc[(
@@ -1126,9 +1114,9 @@ for row in table_index:
             descriptors['sepsis'], temp_col].isna().mean() * 100
 
 # MCU admissions
-tableSIIb = pd.DataFrame('', columns=tableSII_columns, index=table_index)
+tableSIIb = pd.DataFrame('', columns=tableSII_columns, index=tableSII_index)
 missingnessSIIb = pd.DataFrame(
-    columns=['Missing, n', 'Missing, %'], index=table_index)
+    columns=['Missing, n', 'Missing, %'], index=tableSII_index)
 for row in table_index:
     if row in list(table_setup.index):
         temp_fun = table_setup.loc[row, 'function']
@@ -1151,14 +1139,13 @@ for row in table_index:
             descriptors.loc[(
                     ~descriptors['location_IC'] &
                     descriptors['sepsis'] &
-                    descriptors['discharge_less_4d']),
+                    descriptors['antibiotics_to_discharge_max_los_4d']),
                 temp_col])
         tableSIIb.loc[row, 'Antibiotics for < 4 days'] = temp_fun(
             descriptors.loc[(
                     ~descriptors['location_IC'] &
                     descriptors['sepsis'] &
-                    (descriptors['antibiotics_less_4d'] |
-                        descriptors['discharge_less_4d'])),
+                    descriptors['antibiotics_less_4d']),
                 temp_col])
         missingnessSIIb.loc[row, 'Missing, n'] = (
             descriptors.loc[
@@ -1188,6 +1175,14 @@ tableSII['Missing data, n (%)'] = (
 tableSIIb['Missing data, n (%)'] = (
     missingnessSIIb['Missing, n'].astype(str) + ' (' +
     missingnessSIIb['Missing, %'].astype(float).round(1).astype(str) + ')')
+
+tableI.replace('nan (nan)', '', inplace=True)
+tableIa.replace('nan (nan)', '', inplace=True)
+tableIb.replace('nan (nan)', '', inplace=True)
+tableIc.replace('nan (nan)', '', inplace=True)
+tableId.replace('nan (nan)', '', inplace=True)
+tableSII.replace('nan (nan)', '', inplace=True)
+tableSIIb.replace('nan (nan)', '', inplace=True)
 
 tableI.to_csv(inputs.output_file_path + 'icu/table_characteristics_icu.csv')
 tableIb.to_csv(inputs.output_file_path + 'mcu/table_characteristics_mcu.csv')
@@ -1656,7 +1651,7 @@ kruskal_p = kruskal(
     descriptors.loc[descriptors['no_antibiotics'], 'lengthofstay'])
 los_v1 = descriptors.loc[(
     (descriptors['antibiotics_less_4d'] == 1) |
-    (descriptors['discharge_less_4d'] == 1)), 'lengthofstay']
+    (descriptors['lengthofstay'] < 4*24)), 'lengthofstay']
 los_v2 = descriptors.loc[(
     (descriptors['antibiotics_min_4d_death'] == 1)), 'lengthofstay']
 los_v3 = descriptors.loc[(
